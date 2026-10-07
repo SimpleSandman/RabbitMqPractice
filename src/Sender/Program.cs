@@ -16,7 +16,15 @@ await channel.QueueDeclareAsync(
 const string message = "ticket 5";
 byte[] body = Encoding.UTF8.GetBytes(message);
 
-await channel.BasicPublishAsync(exchange: string.Empty, routingKey: "practice-queue", body: body);
+BasicProperties properties = new() { Persistent = true };
+
+await channel.BasicPublishAsync(
+    exchange: string.Empty, 
+    routingKey: "practice-queue", 
+    mandatory: false, 
+    basicProperties: properties,
+    body: body);
+
 Console.WriteLine($" [x] Sent {message}");
 
 Console.WriteLine(" Press [enter] to exit.");
