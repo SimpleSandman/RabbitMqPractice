@@ -3,8 +3,8 @@ using System.Text;
 
 ConnectionFactory factory = new() { HostName = "localhost", UserName = "admin", Password = "password" };
 
-using var connection = await factory.CreateConnectionAsync();
-using var channel = await connection.CreateChannelAsync();
+using IConnection connection = await factory.CreateConnectionAsync();
+using IChannel channel = await connection.CreateChannelAsync();
 
 await channel.QueueDeclareAsync(
     queue: "practice-queue", 
