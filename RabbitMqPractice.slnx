@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Receiver/Receiver.csproj" Id="3bb3d0bb-8b7a-427e-bae7-df28ac488e5d" />
     <Project Path="src/Sender/Sender.csproj" />
   </Folder>
 </Solution>
