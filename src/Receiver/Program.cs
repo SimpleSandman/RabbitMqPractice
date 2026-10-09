@@ -122,7 +122,7 @@ consumer.ReceivedAsync += async (model, ea) =>
 
             break;
         default:
-            throw new InvalidOperationException("Unhandled message outcome");
+            throw new InvalidOperationException($"Unhandled message outcome: {outcome}");
     }
 };
 

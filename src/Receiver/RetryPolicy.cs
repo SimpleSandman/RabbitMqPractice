@@ -10,7 +10,7 @@
             {
                 if (deathObj is not List<object> deathHeader || deathHeader.Count == 0)
                 {
-                    throw new InvalidOperationException("Failed to parse death count from 'x-death' header.");
+                    throw new InvalidOperationException("'x-death' header structure has changed.");
                 }
 
                 if (deathHeader[0] is Dictionary<string, object> latestEntry
