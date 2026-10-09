@@ -1,5 +1,6 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Receiver;
 using System.Text;
 
 ConnectionFactory factory = new() { HostName = "localhost", UserName = "admin", Password = "password" };
@@ -72,67 +73,60 @@ await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
 
 const long maxRetries = 2L;
 
-Console.WriteLine(" [*] Waiting for messages.");
+Console.WriteLine(" [INFO ] Waiting for messages.");
 
 AsyncEventingBasicConsumer consumer = new(channel);
 consumer.ReceivedAsync += async (model, ea) =>
 {
     byte[] body = ea.Body.ToArray();
     string message = Encoding.UTF8.GetString(body);
-    Console.WriteLine($" [x] Received {message}");
+    Console.WriteLine($" [DEBUG] Received '{message}'");
 
-    long numRetries = 0L;
-    IDictionary<string, object?>? headers = ea.BasicProperties.Headers;
-
-    if (headers is not null
-        && headers.TryGetValue("x-death", out object? deathObj)
-        && deathObj is List<object> deathHeader
-        && deathHeader.Count > 0)
+    long deathCount = RetryPolicy.GetDeathCount(ea.BasicProperties.Headers);
+    if (deathCount > 0)
     {
-        if (deathHeader[0] is Dictionary<string, object> latestEntry
-            && latestEntry.TryGetValue("count", out object? countObj)
-            && long.TryParse(countObj?.ToString(), out numRetries))
-        {
-            Console.WriteLine($" [x] Death count: {numRetries}");
-        }
-        else
-        {
-            throw new InvalidOperationException("Failed to parse death count from 'x-death' header.");
-        }
+        Console.WriteLine($" [WARN ] Message '{message}' has been retried {deathCount} time(s).");
     }
 
     await Task.Delay(1000); // Simulate processing time
 
-    if (message.Contains("poison", StringComparison.OrdinalIgnoreCase))
+    MessageOutcome outcome = RetryPolicy.Decide(
+        message.Contains("poison", StringComparison.OrdinalIgnoreCase), 
+        deathCount, 
+        maxRetries);
+
+    switch (outcome)
     {
-        if (numRetries >= maxRetries)
-        {
-            Console.WriteLine(" [!] Max retry attempts reached. Moving to dead letter queue.");
+        case MessageOutcome.Ack:
+            Console.WriteLine($" [INFO ] Processing of message '{message}' succeeded.");
+            await channel.BasicAckAsync(deliveryTag: ea.DeliveryTag, multiple: false);
+
+            break;
+        case MessageOutcome.Retry:
+            Console.WriteLine($" [WARN ] Processing of message '{message}' failed; will retry.");
+            await channel.BasicNackAsync(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+
+            break;
+        case MessageOutcome.Park:
+            Console.WriteLine($" [ERROR] Processing of message '{message}' failed; max retries reached.");
 
             BasicProperties properties = new() { Persistent = true, Headers = ea.BasicProperties.Headers };
             await channel.BasicPublishAsync(
-                exchange: "practice.dlx", 
-                routingKey: "dead", 
-                mandatory: false, 
-                basicProperties: properties, 
+                exchange: "practice.dlx",
+                routingKey: "dead",
+                mandatory: false,
+                basicProperties: properties,
                 body: body);
 
             await channel.BasicAckAsync(deliveryTag: ea.DeliveryTag, multiple: false);
-        }
-        else
-        {
-            Console.WriteLine(" [!] Poison message detected. Rejecting without requeue.");
-            await channel.BasicNackAsync(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
-        }
-    }
-    else
-    {
-        Console.WriteLine(" [o] Done processing message.");
-        await channel.BasicAckAsync(deliveryTag: ea.DeliveryTag, multiple: false);
+
+            break;
+        default:
+            throw new InvalidOperationException("Unhandled message outcome");
     }
 };
 
 await channel.BasicConsumeAsync(queue: "practice-queue", autoAck: false, consumer: consumer);
 
-Console.WriteLine(" Press [enter] to exit.");
+Console.WriteLine(" Press [enter] to exit program.");
 Console.ReadLine();
