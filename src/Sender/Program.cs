@@ -11,9 +11,14 @@ await channel.QueueDeclareAsync(
     durable: true, 
     exclusive: false, 
     autoDelete: false,
-    arguments: new Dictionary<string, object?> { { "x-queue-type", "classic" } });
+    arguments: new Dictionary<string, object?>
+    {
+        { "x-queue-type", "classic" },
+        { "x-dead-letter-exchange", "practice.retry" },
+        { "x-dead-letter-routing-key", "wait" }
+    });
 
-const string message = "ticket 5";
+string message = args.Length > 0 ? string.Join(" ", args) : "ticket A";
 byte[] body = Encoding.UTF8.GetBytes(message);
 
 BasicProperties properties = new() { Persistent = true };
@@ -26,6 +31,3 @@ await channel.BasicPublishAsync(
     body: body);
 
 Console.WriteLine($" [x] Sent {message}");
-
-Console.WriteLine(" Press [enter] to exit.");
-Console.ReadLine();
