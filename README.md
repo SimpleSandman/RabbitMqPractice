@@ -53,7 +53,6 @@ Versions used while building this: RabbitMQ 4.3.6 (the floating `rabbitmq:4-mana
 ## How to run
 
 ```bash
-docker compose ps #if necessary
 docker compose up -d
 ```
 
