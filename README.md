@@ -52,7 +52,8 @@ Versions used while building this: RabbitMQ 4.3.6 (the floating `rabbitmq:4-mana
 
 ## How to run
 
-```
+```bash
+docker compose ps #if necessary
 docker compose up -d
 ```
 
@@ -60,13 +61,13 @@ Starts RabbitMQ with the management UI at http://localhost:15672 (user `admin`, 
 
 In one terminal, start the Receiver. It declares all exchanges and queues:
 
-```
+```bash
 dotnet run --project src/Receiver
 ```
 
 In another terminal, send messages. The text comes from the command line, and defaults to `ticket A` when omitted:
 
-```
+```bash
 dotnet run --project src/Sender -- ticket A
 dotnet run --project src/Sender -- poison B
 ```
@@ -75,7 +76,7 @@ dotnet run --project src/Sender -- poison B
 
 Stop everything and wipe all broker state, including the data volume:
 
-```
+```bash
 docker compose down -v
 ```
 
@@ -150,7 +151,7 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually:
 
 ## Repository layout
 
-```
+```text
 compose.yaml              RabbitMQ with the management UI
 global.json               Selects the Microsoft.Testing.Platform test runner
 src/Sender/               Publishes a message from the command line
