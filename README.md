@@ -1,4 +1,4 @@
-# RabbitMqPractice
+# RabbitMQ Practice Project
 
 A hands-on practice project for learning message-based systems with RabbitMQ and .NET 10. It is not production code, and it is not a claim of production message-bus experience. The goal was to understand the moving parts (acknowledgements, durability, retries, dead-lettering) by building them and watching them fail.
 
