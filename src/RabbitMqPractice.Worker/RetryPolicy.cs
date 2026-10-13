@@ -1,4 +1,4 @@
-﻿namespace Receiver
+﻿namespace RabbitMqPractice.Worker
 {
     public enum MessageOutcome { Ack, Retry, Park }
 

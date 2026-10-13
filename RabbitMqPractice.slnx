@@ -1,9 +1,9 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Receiver/Receiver.csproj" Id="3bb3d0bb-8b7a-427e-bae7-df28ac488e5d" />
-    <Project Path="src/Sender/Sender.csproj" />
+    <Project Path="src/RabbitMqPractice.Worker/RabbitMqPractice.Worker.csproj" Id="3bb3d0bb-8b7a-427e-bae7-df28ac488e5d" />
+    <Project Path="src/RabbitMqPractice.Sender/RabbitMqPractice.Sender.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Receiver.Tests/Receiver.Tests.csproj" />
+    <Project Path="tests/RabbitMqPractice.Worker.Tests/RabbitMqPractice.Worker.Tests.csproj" />
   </Folder>
 </Solution>

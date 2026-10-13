@@ -15,11 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
+    <ProjectReference Include="..\..\src\RabbitMqPractice.Worker\RabbitMqPractice.Worker.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Receiver\Receiver.csproj" />
+    <Using Include="Xunit" />
   </ItemGroup>
 
 </Project>

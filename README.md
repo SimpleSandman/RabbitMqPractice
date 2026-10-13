@@ -6,7 +6,7 @@ Everything runs locally: RabbitMQ in Docker Compose, plus two .NET console apps 
 
 ## What it does
 
-A **Sender** publishes a text message to a durable queue. A **Receiver** consumes it with manual acknowledgements and a prefetch of 1. "Processing" is simulated: it takes one second, and any message containing the word `poison` (case-insensitive) is treated as a failure.
+A **Sender** publishes a text message to a durable queue. A **Worker** consumes it with manual acknowledgements and a prefetch of 1. "Processing" is simulated: it takes one second, and any message containing the word `poison` (case-insensitive) is treated as a failure.
 
 A failed message is not retried immediately. It goes to a wait queue, sits there for 5 seconds, and returns to the work queue. After 2 retries it is moved to a dead-letter queue so it can be inspected.
 
@@ -15,7 +15,7 @@ A failed message is not retried immediately. It goes to a wait queue, sits there
 ```mermaid
 flowchart LR
     S[Sender] -->|"default exchange<br/>key: practice-queue"| Q[practice-queue]
-    Q --> R[Receiver]
+    Q --> R[Worker]
     Q -.->|"nack, requeue false<br/>dead-letter key: wait"| RX{{practice.retry}}
     RX --> W["practice-wait<br/>TTL 5 s"]
     W -.->|"TTL expires<br/>default exchange"| Q
@@ -31,15 +31,15 @@ flowchart LR
 | `practice.dlx` | Exchange, direct, durable | Binding `dead` to `practice-dead` | Entry point to the parking lot |
 | `practice-dead` | Queue, classic, durable | No dead-letter arguments | Holds messages that exhausted their retries |
 
-The Receiver declares this whole topology on startup. The Sender declares only the work queue, with identical arguments.
+The Worker declares this whole topology on startup. The Sender declares only the work queue, with identical arguments.
 
 ### Message flow
 
 1. The Sender publishes a persistent message to the default exchange, using the queue name as the routing key.
-2. The Receiver gets it (prefetch 1), waits one second to simulate work, and decides the outcome.
+2. The Worker gets it (prefetch 1), waits one second to simulate work, and decides the outcome.
 3. **Success:** acknowledge.
 4. **Failure with retries left:** reject without requeue. The work queue's dead-letter settings send the message to `practice.retry`, then to `practice-wait`. After 5 seconds it expires back into the work queue. Each trip adds an `x-death` entry whose `count` increases.
-5. **Failure with the retry limit reached:** the Receiver publishes the message (with its original headers, marked persistent) to `practice.dlx` with key `dead`, then acknowledges the original.
+5. **Failure with the retry limit reached:** the Worker publishes the message (with its original headers, marked persistent) to `practice.dlx` with key `dead`, then acknowledges the original.
 
 The retry limit is `maxRetries = 2`, and the message is parked when the death count reaches it. A permanently failing message is therefore delivered 3 times in total: the first attempt plus 2 retries. One cycle takes roughly 6 seconds (1 second of simulated work plus the 5 second TTL).
 
@@ -58,17 +58,17 @@ docker compose up -d
 
 Starts RabbitMQ with the management UI at http://localhost:15672 (user `admin`, password `password`). These are throwaway local credentials. Ports are bound to `127.0.0.1` only, and the container is capped at 2 CPUs and 2 GB of memory.
 
-In one terminal, start the Receiver. It declares all exchanges and queues:
+In one terminal, start the Worker. It declares all exchanges and queues:
 
 ```bash
-dotnet run --project src/Receiver
+dotnet run --project src/RabbitMqPractice.Worker
 ```
 
 In another terminal, send messages. The text comes from the command line, and defaults to `ticket A` when omitted:
 
 ```bash
-dotnet run --project src/Sender -- ticket A
-dotnet run --project src/Sender -- poison B
+dotnet run --project src/RabbitMqPractice.Sender -- ticket A
+dotnet run --project src/RabbitMqPractice.Sender -- poison B
 ```
 
 `ticket A` is processed and acknowledged. `poison B` fails, retries twice, and ends up in `practice-dead`, which you can confirm in the management UI.
@@ -105,9 +105,9 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually:
 | A message is removed only when acknowledged | Fetched messages in the management UI with different ack modes; stopped a consumer mid-message and watched the broker redeliver it |
 | Durable queue plus persistent message survives a broker restart; a non-persistent message does not | `docker compose restart` with each kind of message |
 | Data survives `down` but not `down -v` | Created a durable queue, then compared the broker's startup logs after each command |
-| Prefetch of 1 stops one worker holding a batch of messages | Compared queue counts with and without it; ran two Receivers against one queue |
+| Prefetch of 1 stops one worker holding a batch of messages | Compared queue counts with and without it; ran two Workers against one queue |
 | Retry with delay, retry cap, and dead-lettering | Ran `poison` messages end to end |
-| The full topology comes up from code alone | Wiped the broker with `docker compose down -v`, started the Receiver, and repeated the poison test |
+| The full topology comes up from code alone | Wiped the broker with `docker compose down -v`, started the Worker, and repeated the poison test |
 | Topic exchange routing | **UI exercise only.** Built an exchange with three wildcard bindings in the management UI and published to it by hand. It is not part of this repo's code. |
 
 ## Design decisions
@@ -118,12 +118,12 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually:
 - **Classic queues.** Chosen to match the queue already in the broker while debugging. Quorum queues (used by the current official tutorials) were not evaluated.
 - **Decision logic is separate from I/O.** `RetryPolicy` is a pair of pure functions, so it can be unit tested without a broker.
 - **A malformed `x-death` header throws instead of returning 0.** Returning 0 would make a message with an unexpected header retry forever and never reach the cap.
-- **Topology declared in code on both sides.** The queue arguments are duplicated in the Sender and Receiver. A mismatch causes a `PRECONDITION_FAILED` error.
+- **Topology declared in code on both sides.** The queue arguments are duplicated in the Sender and Worker. A mismatch causes a `PRECONDITION_FAILED` error.
 
 ## Known limitations
 
 - **The `x-death` ordering is assumed.** The code reads the first entry. On RabbitMQ 4.3.6, a retried message carries two entries: the wait queue's `expired` entry first, then the work queue's `rejected` entry, each with the same count. This was confirmed by decoding the header in the debugger. The code would need revisiting if the topology changed.
-- **Publish-then-acknowledge is not atomic.** If the Receiver crashes between publishing to the dead-letter exchange and acknowledging, the message is redelivered and parked twice. Publisher confirms would narrow the gap and were not used.
+- **Publish-then-acknowledge is not atomic.** If the Worker crashes between publishing to the dead-letter exchange and acknowledging, the message is redelivered and parked twice. Publisher confirms would narrow the gap and were not used.
 - **Exception behavior is untested.** If the handler throws (for example on a malformed header), what the client does with the channel and the message was not tested.
 - **The retry-limit boundary was a deliberate choice.** `maxRetries = 2` with `>=` means 2 retries. Using `>` would allow 3.
 - **The image tag floats.** `rabbitmq:4-management` may resolve to a different version later. Pin an exact version for reproducible runs.
@@ -151,9 +151,9 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually:
 ## Repository layout
 
 ```text
-compose.yaml              RabbitMQ with the management UI
-global.json               Selects the Microsoft.Testing.Platform test runner
-src/Sender/               Publishes a message from the command line
-src/Receiver/             Consumer, retry topology, and RetryPolicy
-tests/Receiver.Tests/     xUnit v3 tests for RetryPolicy
+compose.yaml                             RabbitMQ with the management UI
+global.json                              Selects the Microsoft.Testing.Platform test runner
+src/RabbitMqPractice.Sender/             Publishes a message from the command line
+src/RabbitMqPractice.Worker/             Consumer, retry topology, and RetryPolicy
+tests/RabbitMqPractice.Worker.Tests/     xUnit v3 tests for RetryPolicy
 ```

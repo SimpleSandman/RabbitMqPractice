@@ -1,4 +1,4 @@
-﻿namespace Receiver.Tests;
+﻿namespace RabbitMqPractice.Worker.Tests;
 
 public class RetryPolicyTest
 {

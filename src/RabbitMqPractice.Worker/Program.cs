@@ -1,6 +1,6 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using Receiver;
+using RabbitMqPractice.Worker;
 using System.Text;
 
 ConnectionFactory factory = new() { HostName = "localhost", UserName = "admin", Password = "password" };
