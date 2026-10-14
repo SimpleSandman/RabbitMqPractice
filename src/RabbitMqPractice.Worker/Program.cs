@@ -1,5 +1,6 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Names;
 using RabbitMqPractice.Worker;
 using System.Text;
@@ -11,62 +12,9 @@ using IChannel channel = await connection.CreateChannelAsync();
 
 #region Exchange and Queue Setup
 
-await channel.ExchangeDeclareAsync(
-    exchange: ExchangeName.DeadLetter,
-    type: ExchangeType.Direct,
-    durable: true,
-    autoDelete: false);
+await Topology.DeclareRetryDeadLetterAsync(channel);
 
-await channel.QueueDeclareAsync(
-    queue: QueueName.Dead,
-    durable: true,
-    exclusive: false,
-    autoDelete: false,
-    arguments: new Dictionary<string, object?>
-    {
-        { "x-queue-type", "classic" }
-    });
-
-await channel.QueueBindAsync(
-    queue: QueueName.Dead,
-    exchange: ExchangeName.DeadLetter,
-    routingKey: RoutingKeyName.Dead);
-
-await channel.ExchangeDeclareAsync(
-    exchange: ExchangeName.Retry,
-    type: ExchangeType.Direct,
-    durable: true,
-    autoDelete: false);
-
-await channel.QueueDeclareAsync(
-    queue: QueueName.Wait,
-    durable: true,
-    exclusive: false,
-    autoDelete: false,
-    arguments: new Dictionary<string, object?>
-    {
-        { "x-queue-type", "classic" },
-        { "x-message-ttl", 5000 }, // 5 seconds
-        { "x-dead-letter-exchange", ExchangeName.Default },
-        { "x-dead-letter-routing-key", QueueName.Work }
-    });
-
-await channel.QueueBindAsync(
-    queue: QueueName.Wait,
-    exchange: ExchangeName.Retry,
-    routingKey: RoutingKeyName.Wait);
-
-await channel.QueueDeclareAsync(
-    queue: QueueName.Work, 
-    durable: true, 
-    exclusive: false, 
-    autoDelete: false,
-    arguments: new Dictionary<string, object?> 
-    {
-        { "x-queue-type", "classic" },
-        { "x-dead-letter-exchange", ExchangeName.Retry },
-        { "x-dead-letter-routing-key", RoutingKeyName.Wait }
-    });
+await Topology.DeclareWorkQueueAsync(channel);
 
 await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
 
