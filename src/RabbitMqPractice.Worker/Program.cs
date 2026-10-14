@@ -1,5 +1,6 @@
 ﻿using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMqPractice.Messaging.Names;
 using RabbitMqPractice.Worker;
 using System.Text;
 
@@ -11,13 +12,13 @@ using IChannel channel = await connection.CreateChannelAsync();
 #region Exchange and Queue Setup
 
 await channel.ExchangeDeclareAsync(
-    exchange: "practice.dlx",
+    exchange: ExchangeName.DeadLetter,
     type: ExchangeType.Direct,
     durable: true,
     autoDelete: false);
 
 await channel.QueueDeclareAsync(
-    queue: "practice-dead",
+    queue: QueueName.Dead,
     durable: true,
     exclusive: false,
     autoDelete: false,
@@ -27,18 +28,18 @@ await channel.QueueDeclareAsync(
     });
 
 await channel.QueueBindAsync(
-    queue: "practice-dead",
-    exchange: "practice.dlx",
-    routingKey: "dead");
+    queue: QueueName.Dead,
+    exchange: ExchangeName.DeadLetter,
+    routingKey: RoutingKeyName.Dead);
 
 await channel.ExchangeDeclareAsync(
-    exchange: "practice.retry",
+    exchange: ExchangeName.Retry,
     type: ExchangeType.Direct,
     durable: true,
     autoDelete: false);
 
 await channel.QueueDeclareAsync(
-    queue: "practice-wait",
+    queue: QueueName.Wait,
     durable: true,
     exclusive: false,
     autoDelete: false,
@@ -46,25 +47,25 @@ await channel.QueueDeclareAsync(
     {
         { "x-queue-type", "classic" },
         { "x-message-ttl", 5000 }, // 5 seconds
-        { "x-dead-letter-exchange", string.Empty }, // Default exchange
-        { "x-dead-letter-routing-key", "practice-queue" }
+        { "x-dead-letter-exchange", ExchangeName.Default },
+        { "x-dead-letter-routing-key", QueueName.Work }
     });
 
 await channel.QueueBindAsync(
-    queue: "practice-wait",
-    exchange: "practice.retry",
-    routingKey: "wait");
+    queue: QueueName.Wait,
+    exchange: ExchangeName.Retry,
+    routingKey: RoutingKeyName.Wait);
 
 await channel.QueueDeclareAsync(
-    queue: "practice-queue", 
+    queue: QueueName.Work, 
     durable: true, 
     exclusive: false, 
     autoDelete: false,
     arguments: new Dictionary<string, object?> 
     {
         { "x-queue-type", "classic" },
-        { "x-dead-letter-exchange", "practice.retry" },
-        { "x-dead-letter-routing-key", "wait" }
+        { "x-dead-letter-exchange", ExchangeName.Retry },
+        { "x-dead-letter-routing-key", RoutingKeyName.Wait }
     });
 
 await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
@@ -112,8 +113,8 @@ consumer.ReceivedAsync += async (model, ea) =>
 
             BasicProperties properties = new() { Persistent = true, Headers = ea.BasicProperties.Headers };
             await channel.BasicPublishAsync(
-                exchange: "practice.dlx",
-                routingKey: "dead",
+                exchange: ExchangeName.DeadLetter,
+                routingKey: RoutingKeyName.Dead,
                 mandatory: false,
                 basicProperties: properties,
                 body: body);
@@ -126,7 +127,7 @@ consumer.ReceivedAsync += async (model, ea) =>
     }
 };
 
-await channel.BasicConsumeAsync(queue: "practice-queue", autoAck: false, consumer: consumer);
+await channel.BasicConsumeAsync(queue: QueueName.Work, autoAck: false, consumer: consumer);
 
 Console.WriteLine(" Press [enter] to exit program.");
 Console.ReadLine();
