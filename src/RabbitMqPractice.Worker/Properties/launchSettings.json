@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "RabbitMqPractice.Worker": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

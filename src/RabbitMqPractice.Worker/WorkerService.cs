@@ -6,13 +6,13 @@ using System.Text;
 
 namespace RabbitMqPractice.Worker
 {
-    public sealed class WorkerService : BackgroundService
+    public sealed class WorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
     {
         private readonly SemaphoreSlim _channelSemaphore = new(1, 1);
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            ConnectionFactory factory = new() { HostName = "localhost", UserName = "admin", Password = "password" };
+            ConnectionFactory factory = connectionFactory.CreateConnectionFactory();
 
             await using IConnection connection = await factory.CreateConnectionAsync(cancellationToken: stoppingToken);
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);

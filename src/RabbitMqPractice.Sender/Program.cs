@@ -1,12 +1,21 @@
-﻿using RabbitMQ.Client;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using RabbitMQ.Client;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Names;
 using System.Text;
 
-ConnectionFactory factory = new() { HostName = "localhost", UserName = "admin", Password = "password" };
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    ContentRootPath = AppContext.BaseDirectory
+});
+IConfiguration configuration = builder.Configuration;
 
-using IConnection connection = await factory.CreateConnectionAsync();
-using IChannel channel = await connection.CreateChannelAsync();
+ConfigureConnectionFactory connectionFactory = new(configuration);
+ConnectionFactory factory = connectionFactory.CreateConnectionFactory();
+
+await using IConnection connection = await factory.CreateConnectionAsync();
+await using IChannel channel = await connection.CreateChannelAsync();
 
 await Topology.DeclareWorkQueueAsync(channel);
 
@@ -16,9 +25,9 @@ byte[] body = Encoding.UTF8.GetBytes(message);
 BasicProperties properties = new() { Persistent = true };
 
 await channel.BasicPublishAsync(
-    exchange: ExchangeName.Default, 
-    routingKey: QueueName.Work, 
-    mandatory: false, 
+    exchange: ExchangeName.Default,
+    routingKey: QueueName.Work,
+    mandatory: false,
     basicProperties: properties,
     body: body);
 
