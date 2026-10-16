@@ -1,0 +1,39 @@
+@RabbitMqPractice.Api_HostAddress = http://localhost:5025
+
+### create a purchase
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "quantity": 5, "productName": "Sample Product" }
+
+### quantity too low
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "quantity": 0, "productName": "Sample Product" }
+
+### empty name
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "quantity": 1, "productName": "" }
+
+### null name
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "quantity": 1, "productName": null }
+
+### missing quantity
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "productName": "Sample Product" }
+
+### client tries to choose the id
+POST {{RabbitMqPractice.Api_HostAddress}}/purchases
+Content-Type: application/json
+
+{ "messageId": "12345678-1234-1234-1234-123456789012", "quantity": 1, "productName": "Sample Product" }
+
+###
