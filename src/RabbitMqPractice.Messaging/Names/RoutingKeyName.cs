@@ -4,5 +4,6 @@
     {
         public const string Dead = "dead";
         public const string Wait = "wait";
+        public const string PurchaseCompleted = "purchase.completed";
     }
 }
