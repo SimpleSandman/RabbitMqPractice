@@ -6,6 +6,7 @@
     <Project Path="src/RabbitMqPractice.Worker/RabbitMqPractice.Worker.csproj" Id="3bb3d0bb-8b7a-427e-bae7-df28ac488e5d" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/RabbitMqPractice.Messaging.Tests/RabbitMqPractice.Messaging.Tests.csproj" Id="4b141ee0-79de-4394-9212-02cc15d8ac96" />
     <Project Path="tests/RabbitMqPractice.Worker.Tests/RabbitMqPractice.Worker.Tests.csproj" />
   </Folder>
 </Solution>

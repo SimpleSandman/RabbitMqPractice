@@ -76,5 +76,15 @@ namespace RabbitMqPractice.Messaging
                 routingKey: RoutingKeyName.Wait,
                 cancellationToken: cancellationToken);
         }
+
+        public static async Task DeclareStoreEventsAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName.StoreEvents,
+                type: ExchangeType.Topic,
+                durable: true,
+                autoDelete: false,
+                cancellationToken: cancellationToken);
+        }
     }
 }
