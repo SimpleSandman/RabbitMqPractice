@@ -1,4 +1,8 @@
+using RabbitMQ.Client;
 using RabbitMqPractice.Api.Models.Requests;
+using RabbitMqPractice.Api.Publishers;
+using RabbitMqPractice.Api.Publishers.Interfaces;
+using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -6,6 +10,12 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddOpenApi();
 builder.Services.AddValidation();
+
+ConnectionFactory factory = new ConfigureConnectionFactory(builder.Configuration).CreateConnectionFactory();
+factory.ClientProvidedName = "api";
+
+RabbitMqPurchaseEventPublisher purchasePublisher = await RabbitMqPurchaseEventPublisher.CreateAsync(factory, CancellationToken.None);
+builder.Services.AddSingleton<IPurchaseEventPublisher>(_ => purchasePublisher);
 
 WebApplication app = builder.Build();
 
@@ -17,7 +27,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.MapPost("/purchases", (PurchaseRequest request) =>
+app.MapPost("/purchases", async (PurchaseRequest request, IPurchaseEventPublisher publisher, CancellationToken cancellationToken) =>
 {
     PurchaseCompleted purchaseEvent = new()
     {
@@ -27,7 +37,9 @@ app.MapPost("/purchases", (PurchaseRequest request) =>
         ProductName = request.ProductName
     };
 
-    return Results.Ok(purchaseEvent);
+    await publisher.PublishAsync(purchaseEvent, cancellationToken);
+
+    return Results.Accepted(value: purchaseEvent);
 });
 
 app.Run();
