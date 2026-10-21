@@ -2,7 +2,10 @@
 using RabbitMqPractice.Worker;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddHostedService<WorkerService>();
+
+// worker services
+builder.Services.AddHostedService<PracticeWorkerService>();
+builder.Services.AddHostedService<StoreWorkerService>();
 
 builder.Services.AddSingleton<ConfigureConnectionFactory>();
 

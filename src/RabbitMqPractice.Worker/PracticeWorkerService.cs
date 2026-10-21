@@ -6,13 +6,14 @@ using System.Text;
 
 namespace RabbitMqPractice.Worker
 {
-    public sealed class WorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
+    public sealed class PracticeWorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
     {
         private readonly SemaphoreSlim _channelSemaphore = new(1, 1);
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             ConnectionFactory factory = connectionFactory.CreateConnectionFactory();
+            factory.ClientProvidedName = "practice";
 
             await using IConnection connection = await factory.CreateConnectionAsync(cancellationToken: stoppingToken);
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);

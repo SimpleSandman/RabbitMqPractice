@@ -86,5 +86,54 @@ namespace RabbitMqPractice.Messaging
                 autoDelete: false,
                 cancellationToken: cancellationToken);
         }
+
+        public static async Task DeclareStoreQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await DeclareStoreEventsAsync(channel, cancellationToken);
+
+            await channel.QueueDeclareAsync(
+                queue: QueueName.PurchaseProcessing,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>
+                {
+                    { "x-queue-type", "classic" }
+                },
+                cancellationToken: cancellationToken);
+
+            await channel.QueueBindAsync(
+                queue: QueueName.PurchaseProcessing,
+                exchange: ExchangeName.StoreEvents,
+                routingKey: RoutingKeyName.PurchaseCompleted,
+                cancellationToken: cancellationToken);
+        }
+
+        public static async Task DeclarePurchaseDlxQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName.DeadLetter,
+                type: ExchangeType.Direct,
+                durable: true,
+                autoDelete: false,
+                cancellationToken: cancellationToken);
+
+            await channel.QueueDeclareAsync(
+                queue: QueueName.PurchaseDead,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>
+                {
+                    { "x-queue-type", "classic" }
+                },
+                cancellationToken: cancellationToken);
+
+            await channel.QueueBindAsync(
+                queue: QueueName.PurchaseDead,
+                exchange: ExchangeName.DeadLetter,
+                routingKey: RoutingKeyName.PurchaseDead,
+                cancellationToken: cancellationToken);
+        }
     }
 }
