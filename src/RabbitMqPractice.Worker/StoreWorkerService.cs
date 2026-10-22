@@ -20,12 +20,15 @@ namespace RabbitMqPractice.Worker
 
             await Topology.DeclareStoreQueueAsync(channel, stoppingToken);
             await Topology.DeclarePurchaseDlxQueueAsync(channel, stoppingToken);
+            await Topology.DeclarePurchaseRetryAsync(channel, stoppingToken);
 
             await channel.BasicQosAsync(
                 prefetchSize: 0,
                 prefetchCount: 1,
                 global: false,
                 cancellationToken: stoppingToken);
+
+            const long maxRetries = 2L;
 
             Console.WriteLine(" [INFO ] Waiting for store messages.");
 
@@ -54,26 +57,24 @@ namespace RabbitMqPractice.Worker
                         messageId = purchaseCompleted.MessageId;
                         Console.WriteLine($" [DEBUG] Received PurchaseCompleted message '{messageId}'");
 
-                        // TODO: For now, park any retry attempts until the addition to "transient failures" feature
                         long deathCount = RetryPolicy.GetDeathCount(ea.BasicProperties.Headers);
                         if (deathCount > 0)
                         {
-                            outcome = MessageOutcome.Park; // ensure explicit outcome, regardless of default outcome
-                            Console.WriteLine($" [ERROR] Message '{messageId}' will be parked.");
+                            Console.WriteLine($" [WARN ] Message '{messageId}' has been retried {deathCount} time(s).");
                         }
-                        else
-                        {
-                            outcome = MessageOutcome.Ack;
-                        }
+
+                        outcome = RetryPolicy.Decide(
+                            purchaseCompleted.ProductName.Contains("poison", StringComparison.OrdinalIgnoreCase),
+                            deathCount,
+                            maxRetries);
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($" [ERROR] Exception while reading the message: {ex.GetType().Name}: {ex.Message}.");
-
                         outcome = MessageOutcome.Park;
                     }
 
-                    //await Task.Delay(1000); // Simulate processing time
+                    await Task.Delay(1000); // Simulate processing time
 
                     switch (outcome)
                     {
@@ -82,11 +83,11 @@ namespace RabbitMqPractice.Worker
                             Console.WriteLine($" [INFO ] Processing of message '{messageId}' succeeded.");
 
                             break;
-                        //case MessageOutcome.Retry:
-                        //    Console.WriteLine($" [WARN ] Processing of message '{message}' failed; will retry.");
-                        //    await channel.BasicNackAsync(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                        case MessageOutcome.Retry:
+                            Console.WriteLine($" [WARN ] Processing of message '{messageId}' failed; will retry.");
+                            await channel.BasicNackAsync(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
 
-                        //    break;
+                            break;
                         case MessageOutcome.Park:
                             Console.WriteLine($" [ERROR] Processing of message '{messageId}' failed.");
 

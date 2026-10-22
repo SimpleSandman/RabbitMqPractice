@@ -8,5 +8,6 @@
 
         public const string PurchaseProcessing = "purchase-processing";
         public const string PurchaseDead = "purchase-dead";
+        public const string PurchaseWait = "purchase-wait";
     }
 }

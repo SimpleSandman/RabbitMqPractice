@@ -98,7 +98,9 @@ namespace RabbitMqPractice.Messaging
                 autoDelete: false,
                 arguments: new Dictionary<string, object?>
                 {
-                    { "x-queue-type", "classic" }
+                    { "x-queue-type", "classic" },
+                    { "x-dead-letter-exchange", ExchangeName.PurchaseRetry },
+                    { "x-dead-letter-routing-key", RoutingKeyName.PurchaseWait }
                 },
                 cancellationToken: cancellationToken);
 
@@ -133,6 +135,36 @@ namespace RabbitMqPractice.Messaging
                 queue: QueueName.PurchaseDead,
                 exchange: ExchangeName.DeadLetter,
                 routingKey: RoutingKeyName.PurchaseDead,
+                cancellationToken: cancellationToken);
+        }
+
+        public static async Task DeclarePurchaseRetryAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName.PurchaseRetry,
+                type: ExchangeType.Direct,
+                durable: true,
+                autoDelete: false,
+                cancellationToken: cancellationToken);
+
+            await channel.QueueDeclareAsync(
+                queue: QueueName.PurchaseWait,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>
+                {
+                    { "x-queue-type", "classic" },
+                    { "x-message-ttl", 5000 }, // 5 seconds
+                    { "x-dead-letter-exchange", ExchangeName.Default },
+                    { "x-dead-letter-routing-key", QueueName.PurchaseProcessing }
+                },
+                cancellationToken: cancellationToken);
+
+            await channel.QueueBindAsync(
+                queue: QueueName.PurchaseWait,
+                exchange: ExchangeName.PurchaseRetry,
+                routingKey: RoutingKeyName.PurchaseWait,
                 cancellationToken: cancellationToken);
         }
     }

@@ -6,5 +6,6 @@
         public const string Wait = "wait";
         public const string PurchaseCompleted = "purchase.completed";
         public const string PurchaseDead = "purchase.dead";
+        public const string PurchaseWait = "purchase.wait";
     }
 }
