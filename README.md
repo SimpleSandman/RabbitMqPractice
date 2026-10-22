@@ -12,7 +12,7 @@ The project has two flows that share one broker.
 
 A failed message is not retried immediately. It goes to a wait queue, sits there for 5 seconds, and returns to the work queue. After 2 retries it is moved to a dead-letter queue so it can be inspected.
 
-**The store flow.** An **API** accepts a purchase (`POST /purchases` with a product name and a quantity), validates it, and publishes a `PurchaseCompleted` event to a topic exchange. The Worker's store service reads the events from its own queue. The API publishes to an exchange, not to a queue, so it does not know who consumes the events. The consumer does no real work: it reads the event, prints its ID, and acknowledges it. Retries for transient failures are not built yet.
+**The store flow.** An **API** accepts a purchase (`POST /purchases` with a product name and a quantity), validates it, and publishes a `PurchaseCompleted` event to a topic exchange. The Worker's store service reads the events from its own queue. The API publishes to an exchange, not to a queue, so it does not know who consumes the events. The consumer does no real work: it reads the event, prints its ID, and acknowledges it. Processing is simulated, and a product name containing `poison` counts as a transient failure. As in the practice flow, a failed event goes to a wait queue, returns after 5 seconds, and is parked in its own dead-letter queue after 2 retries.
 
 ## Architecture
 
@@ -46,15 +46,20 @@ flowchart LR
     A["API<br/>POST /purchases"] -->|"key: purchase.completed"| SE{{store.events}}
     SE --> PP[purchase-processing]
     PP --> SW[Worker: store service]
-    SW -->|"unreadable message: publish<br/>key: purchase.dead, then ack"| DX{{practice.dlx}}
+    PP -.->|"nack, requeue false<br/>dead-letter key: purchase.wait"| PR{{purchase.retry}}
+    PR --> PW["purchase-wait<br/>TTL 5 s"]
+    PW -.->|"TTL expires<br/>default exchange"| PP
+    SW -->|"unreadable, or after 2 retries:<br/>publish key: purchase.dead, then ack"| DX{{practice.dlx}}
     DX --> PD[purchase-dead]
 ```
 
 | Name | Kind | Settings | Role |
 |---|---|---|---|
 | `store.events` | Exchange, topic, durable | Declared by the API and by the consumer | Entry point for purchase events |
-| `purchase-processing` | Queue, classic, durable | Bound to `store.events` with key `purchase.completed`. Declared by the consumer. | The consumer's queue, named for its job |
-| `purchase-dead` | Queue, classic, durable | Bound to `practice.dlx` with key `purchase.dead` | Holds purchase messages the consumer could not read |
+| `purchase-processing` | Queue, classic, durable | Bound to `store.events` with key `purchase.completed`. Dead-letters to `purchase.retry` with key `purchase.wait`. Declared by the consumer. | The consumer's queue, named for its job |
+| `purchase.retry` | Exchange, direct, durable | Binding `purchase.wait` to `purchase-wait` | Receives rejected purchase messages |
+| `purchase-wait` | Queue, classic, durable | TTL 5000 ms, dead-letters to the default exchange with key `purchase-processing` | Delay before a retry |
+| `purchase-dead` | Queue, classic, durable | Bound to `practice.dlx` with key `purchase.dead` | Holds purchase messages that could not be read, or that failed after 2 retries |
 
 The two dead-letter queues share one exchange but use different routing keys (`dead` and `purchase.dead`), so each flow's parked messages land in their own queue.
 
@@ -75,9 +80,11 @@ The retry limit is `maxRetries = 2`, and the message is parked when the death co
 
 1. A client sends `POST /purchases` with a quantity and a product name. The API validates the request: the quantity must be from 1 to 100, and the product name must be present and at most 100 characters. A request that fails validation gets a 400, and nothing is published.
 2. The API builds a `PurchaseCompleted` event. It sets the message ID (a new GUID) and the timestamp (UTC) itself, so a client cannot choose them. It serializes the event to JSON and publishes it, persistent and with a JSON content type, to `store.events` with key `purchase.completed`. The response is 202 Accepted, with the event in the body.
-3. The store service (prefetch 1) deserializes the body, prints the event ID, and acknowledges it.
-4. If the body cannot be deserialized (invalid JSON, or a missing required field), the service publishes the original body to `practice.dlx` with key `purchase.dead`, then acknowledges the original.
-5. A message that already carries an `x-death` header is also parked for now. That is a placeholder until retries for transient failures are added.
+3. The store service (prefetch 1) deserializes the body, prints the event ID, waits one second to simulate work, and asks `RetryPolicy` for the outcome. An event whose product name contains `poison` (case-insensitive) counts as a failure.
+4. **Success:** acknowledge.
+5. **Failure with retries left:** reject without requeue. The queue's dead-letter settings send the event to `purchase.retry`, then to `purchase-wait`. After 5 seconds it expires back into `purchase-processing`.
+6. **Failure with the retry limit reached:** the service publishes the original body (with its headers, marked persistent) to `practice.dlx` with key `purchase.dead`, then acknowledges the original. That is 3 deliveries in total, as in the practice flow.
+7. **Unreadable message:** if reading the message throws (invalid JSON, a missing required field, or a malformed `x-death` header), it is parked the same way at once, with no retry, because retrying cannot fix it.
 
 ## Prerequisites
 
@@ -136,6 +143,8 @@ This uses the `http` launch profile, so the API listens on http://localhost:5025
 
 Send requests with the `.http` file in `src/RabbitMqPractice.Api`, which Visual Studio can run. It has a valid purchase and several invalid ones. A valid request returns 202 with the event, and the Worker prints `Received PurchaseCompleted message '<id>'` and `Processing of message '<id>' succeeded.`
 
+To watch a retry, send a request whose product name contains `poison`, such as `poison widget`. The Worker receives the event three times, then parks it in `purchase-dead`, where the management UI shows its `x-death` header.
+
 To see an event without the consumer, create a queue in the management UI, bind it to `store.events` with the key `purchase.completed`, and use Get Messages on it.
 
 ### Stopping and resetting
@@ -181,7 +190,7 @@ Nothing automated covers the API endpoint, the publisher, either Worker service,
 
 ### Verified by hand against a real broker
 
-Nothing automated talks to RabbitMQ. These behaviors were observed manually. Rows marked (v1.0.0) were checked on the original console version, before the Worker Service host, and were not repeated. Some shutdown checks used a temporary longer simulated delay (10 or 30 seconds) so the shutdown window was easy to hit.
+Nothing automated talks to RabbitMQ. These behaviors were observed manually. Rows marked (v1.0.0) were checked on the original console version, before the Worker Service host, and were not repeated. Some checks used a temporary longer simulated delay (5, 10, or 30 seconds) so the window was easy to hit.
 
 | Behavior | How it was checked |
 |---|---|
@@ -204,7 +213,11 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 | `store.events` is a durable topic exchange | `rabbitmqctl list_exchanges name type durable` |
 | The store service reads events from its own queue | Wiped the broker, then ran the API first and the Worker second, and the Worker first and the API second. Each time the Worker printed the event ID and acknowledged it, and `purchase-processing` was empty afterward. |
 | Unreadable purchase messages are parked in their own queue | Published `not json` and `{"quantity":1}` to `store.events` from the management UI. Each was logged with the serializer's exception and parked. `purchase-dead` went from 0 to 2, and `practice-dead` stayed at 1. |
-| The practice flow is unchanged by the store flow | After the store topology was added, the `rabbitmqctl list_queues name durable arguments messages` output for the three practice queues was identical to the saved baseline. |
+| A transient failure on the store queue is retried with a delay, then parked | Sent a request with the product name `poison widget`. The Worker received the event three times, logging "retried 1 time(s)" and "retried 2 time(s)" on the second and third, then parked it. It sat in `purchase-dead` with an `x-death` header. This run used a 5 second simulated delay. |
+| A retry wait does not block the consumer | Sent a normal request right after the failing event's first rejection. The Worker processed it before the failing event's second delivery. This run used a 5 second simulated delay. |
+| An unreadable body skips the retry loop | Published `not json` from the management UI. It was logged and parked at once, with no retry lines, and the parked message had no `x-death` header. |
+| The `x-death` header on the purchase queue has the same shape as on the practice queue | Read in the management UI on the parked message: the wait queue's `expired` entry first, then the work queue's `rejected` entry, both with count 2. The `rejected` entry named `store.events` and the key `purchase.completed`. RabbitMQ also added `x-first-death-*` and `x-last-death-*` headers. The `time` values were five seconds apart, and by the console timing they were the first occurrence, not the latest. That last part is my reading of one run. |
+| The practice flow is unchanged by the store flow | After the store topology was added, and again after the purchase retry topology, the `rabbitmqctl list_queues name durable arguments messages` output for the three practice queues was identical to the saved baseline. |
 | The API's connection is named and closes cleanly | The `ClientProvidedName` appeared in the broker log and the management UI. Every API shutdown logged a matching `closing AMQP connection` line at info level, with no warning. |
 | Each service has its own named connection | The management UI's Connections tab showed three connections named `practice`, `store`, and `api`, with one channel each. |
 | Topic exchange routing with wildcard bindings | **UI exercise only.** Built an exchange with three wildcard bindings in the management UI and published to it by hand. The code uses one exact key (`purchase.completed`) on a topic exchange. |
@@ -227,12 +240,15 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - **202 Accepted, with the event in the body.** There are no publisher confirms, so the API cannot say the broker has the message. It reports only that the request was accepted.
 - **The API declares only the exchange, and the consumer declares its own queue and binding.** The API does not know who consumes the events, which is the point of publishing to an exchange, and a second consumer would need no API change. The cost is the cold-start gap described below.
 - **Queues are named for the consumer's job.** `purchase-processing`, not a name based on the event, so a second consumer (an email service, for example) can get its own queue bound to the same exchange.
-- **Unreadable purchase messages are parked with a separate routing key.** The store service publishes them to `practice.dlx` with key `purchase.dead` and acknowledges the original, the same pattern as the practice flow. A queue has a single dead-letter exchange setting, and that stays free for a future retry loop on `purchase-processing`.
+- **Parked purchase messages use a separate routing key.** The store service publishes them to `practice.dlx` with key `purchase.dead` and acknowledges the original, the same pattern as the practice flow. A queue has a single dead-letter exchange setting, and on `purchase-processing` it points at the retry exchange, so parking is done by publishing from the consumer.
+- **The store queue has its own retry exchange and wait queue.** `purchase.retry` and `purchase-wait`, not the practice flow's, so the two flows stay independent. Sharing `practice.retry` with a different key would also have worked.
+- **One `RetryPolicy` serves both flows.** The decision (acknowledge, retry, or park) is the same pure function, fed a failure flag and the `x-death` count.
+- **Unreadable messages never enter the retry loop.** Retrying cannot fix a body that cannot be parsed, so the service parks it at once. Only failures that might clear up on their own are retried.
 - **One serializer for both sides.** `EventSerializer` in the Messaging project holds the JSON options (the web defaults: camelCase names, case-insensitive reading) and the content type, so the publisher and the consumer cannot disagree. A body of `null` is treated as an error like any other unreadable body.
 
 ## Known limitations
 
-- **The `x-death` ordering is assumed.** The code reads the first entry. On RabbitMQ 4.3.6, a retried message carries two entries: the wait queue's `expired` entry first, then the work queue's `rejected` entry, each with the same count. This was confirmed by decoding the header in the debugger. The code would need revisiting if the topology changed.
+- **The `x-death` ordering is assumed.** The code reads the first entry. On RabbitMQ 4.3.6, a retried message carries two entries: the wait queue's `expired` entry first, then the work queue's `rejected` entry, each with the same count. This was confirmed by decoding the header in the debugger on the practice queue, and by reading it in the management UI on the purchase queue. The code would need revisiting if the topology changed.
 - **Publish-then-acknowledge is not atomic.** If a Worker service crashes between publishing to the dead-letter exchange and acknowledging, the message is redelivered and parked twice. Publisher confirms would narrow the gap and were not used.
 - **Exception behavior is only partly tested.** Observed: an acknowledgement on an already-closed channel throws `AlreadyClosedException`, which the handler logs and rethrows. Not tested: what the client does with the message and the channel when a handler throws on an open channel.
 - **The retry-limit boundary was a deliberate choice.** `maxRetries = 2` with `>=` means 2 retries. Using `>` would allow 3.
@@ -252,7 +268,8 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - **The API creates its publisher before the host is built.** My reasoning, which I did not try, is that tests which start the host would need a live broker even with a fake publisher registered, until this is restructured.
 - **The two validation failure shapes differ.** A validation failure returns a JSON body. A body missing a required field fails during binding and returned a plain-text exception message in Development. Production behavior was not checked.
 - **Serializer edge cases are not covered.** Numbers sent as strings, duplicate property names, and a UTF-8 byte order mark.
-- **The store service has no retry.** It parks any unreadable message, and any message that arrives with an `x-death` header, instead of retrying.
+- **The purchase retry reuses the practice flow's fixed delay and cap.** 5 seconds and 2 retries, with no backoff. The failure rule is simulated: a product name containing `poison`.
+- **Parked messages lose their content type.** The park publish copies only the persistence flag and the headers, so the copy in the dead-letter queue has no content type (seen in the management UI). Cosmetic.
 - **Both Worker services log the same shutdown line,** so the two lines cannot be told apart.
 
 ## Gotchas I hit
@@ -266,10 +283,10 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 7. **The same command found the config file in one place and not another.** The Sender found `appsettings.json` under the debugger but not under `dotnet run` from the repo root, because the host looks in the working directory, which differed. Fix: set the host's content root to the executable's folder.
 8. **Serializer tests that would pass for the wrong reason.** My first versions of the missing-property and malformed-JSON tests fed their JSON text through `Serialize`, which wraps a string in another layer of JSON. They would have thrown whatever the input was. It was caught in review, not by running the tests. Fix: raw bytes as the input, and valid bodies as controls.
 9. **A second dead-letter queue bound with the same routing key.** I first bound `purchase-dead` to `practice.dlx` with the key `dead`, the same key as `practice-dead`, so each parked message would have landed in both queues. A second slip left the park code publishing with the old key. Both were caught in review before running. Fix: a separate key, `purchase.dead`, in the binding and in the publish. Afterward, the two bad messages went only to `purchase-dead`.
+10. **A retry exchange that was never declared, and a queue declared twice with different arguments.** In my first draft of the purchase retry, the wait queue was bound to an exchange that nothing declared, and `purchase-processing` was declared once without dead-letter arguments and again with them. The first would have failed the bind, and the second is the `PRECONDITION_FAILED` of gotcha 1. Both were caught in review before running. Fix: declare the exchange in the retry method, and declare the queue once with its final arguments.
 
 ## Not included
 
-- Retries for the store service's transient failures
 - A second consumer on `store.events`
 - Publisher confirms
 - An idempotent handler or duplicate-message detection
