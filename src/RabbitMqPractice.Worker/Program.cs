@@ -1,5 +1,7 @@
 ﻿using RabbitMqPractice.Messaging;
-using RabbitMqPractice.Worker;
+using RabbitMqPractice.Worker.Email;
+using RabbitMqPractice.Worker.Practice;
+using RabbitMqPractice.Worker.Store;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 

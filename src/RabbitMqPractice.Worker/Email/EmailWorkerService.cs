@@ -3,8 +3,9 @@ using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Worker.Common;
 
-namespace RabbitMqPractice.Worker
+namespace RabbitMqPractice.Worker.Email
 {
     public sealed class EmailWorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
     {

@@ -3,8 +3,9 @@ using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Worker.Common;
 
-namespace RabbitMqPractice.Worker
+namespace RabbitMqPractice.Worker.Store
 {
     public sealed class StoreWorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
     {

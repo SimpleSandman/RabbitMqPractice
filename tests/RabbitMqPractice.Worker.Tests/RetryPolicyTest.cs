@@ -1,4 +1,6 @@
-﻿namespace RabbitMqPractice.Worker.Tests;
+﻿using RabbitMqPractice.Worker.Common;
+
+namespace RabbitMqPractice.Worker.Tests;
 
 public class RetryPolicyTest
 {

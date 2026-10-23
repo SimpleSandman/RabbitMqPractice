@@ -2,9 +2,10 @@
 using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Worker.Common;
 using System.Text;
 
-namespace RabbitMqPractice.Worker
+namespace RabbitMqPractice.Worker.Practice
 {
     public sealed class PracticeWorkerService(ConfigureConnectionFactory connectionFactory) : BackgroundService
     {
