@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/RabbitMqPractice.Api/RabbitMqPractice.Api.csproj" Id="ef1703de-285f-4ba5-9311-a6a2413fa54e" />
     <Project Path="src/RabbitMqPractice.Messaging/RabbitMqPractice.Messaging.csproj" Id="aba5fabc-a138-44f6-9879-5b589313c666" />
