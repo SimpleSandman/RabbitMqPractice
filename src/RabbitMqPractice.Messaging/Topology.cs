@@ -24,12 +24,7 @@ namespace RabbitMqPractice.Messaging
         public static async Task DeclareRetryDeadLetterAsync(IChannel channel, CancellationToken cancellationToken = default)
         {
             // Setup Dead Letter Exchange and Queue
-            await channel.ExchangeDeclareAsync(
-                exchange: ExchangeName.DeadLetter,
-                type: ExchangeType.Direct,
-                durable: true,
-                autoDelete: false,
-                cancellationToken: cancellationToken);
+            await DeclareDeadLetterExchangeAsync(channel, cancellationToken);
 
             await channel.QueueDeclareAsync(
                 queue: QueueName.Dead,
@@ -111,14 +106,9 @@ namespace RabbitMqPractice.Messaging
                 cancellationToken: cancellationToken);
         }
 
-        public static async Task DeclarePurchaseDlxQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
+        public static async Task DeclarePurchaseDeadQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
         {
-            await channel.ExchangeDeclareAsync(
-                exchange: ExchangeName.DeadLetter,
-                type: ExchangeType.Direct,
-                durable: true,
-                autoDelete: false,
-                cancellationToken: cancellationToken);
+            await DeclareDeadLetterExchangeAsync(channel, cancellationToken);
 
             await channel.QueueDeclareAsync(
                 queue: QueueName.PurchaseDead,
@@ -165,6 +155,58 @@ namespace RabbitMqPractice.Messaging
                 queue: QueueName.PurchaseWait,
                 exchange: ExchangeName.PurchaseRetry,
                 routingKey: RoutingKeyName.PurchaseWait,
+                cancellationToken: cancellationToken);
+        }
+
+        public static async Task DeclarePurchaseEmailQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await channel.QueueDeclareAsync(
+                queue: QueueName.PurchaseEmail,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>
+                {
+                    { "x-queue-type", "classic" }
+                },
+                cancellationToken: cancellationToken);
+
+            await channel.QueueBindAsync(
+                queue: QueueName.PurchaseEmail,
+                exchange: ExchangeName.StoreEvents,
+                routingKey: RoutingKeyName.PurchaseWildcard,
+                cancellationToken: cancellationToken);
+        }
+
+        public static async Task DeclarePurchaseEmailDeadQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await DeclareDeadLetterExchangeAsync(channel, cancellationToken);
+
+            await channel.QueueDeclareAsync(
+                queue: QueueName.PurchaseEmailDead,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: new Dictionary<string, object?>
+                {
+                    { "x-queue-type", "classic" }
+                },
+                cancellationToken: cancellationToken);
+
+            await channel.QueueBindAsync(
+                queue: QueueName.PurchaseEmailDead,
+                exchange: ExchangeName.DeadLetter,
+                routingKey: RoutingKeyName.PurchaseEmailDead,
+                cancellationToken: cancellationToken);
+        }
+
+        private static async Task DeclareDeadLetterExchangeAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName.DeadLetter,
+                type: ExchangeType.Direct,
+                durable: true,
+                autoDelete: false,
                 cancellationToken: cancellationToken);
         }
     }

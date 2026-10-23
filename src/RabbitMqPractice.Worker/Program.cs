@@ -4,6 +4,7 @@ using RabbitMqPractice.Worker;
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
 // worker services
+builder.Services.AddHostedService<EmailWorkerService>();
 builder.Services.AddHostedService<PracticeWorkerService>();
 builder.Services.AddHostedService<StoreWorkerService>();
 

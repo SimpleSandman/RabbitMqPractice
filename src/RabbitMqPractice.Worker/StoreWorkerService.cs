@@ -19,7 +19,7 @@ namespace RabbitMqPractice.Worker
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
             await Topology.DeclareStoreQueueAsync(channel, stoppingToken);
-            await Topology.DeclarePurchaseDlxQueueAsync(channel, stoppingToken);
+            await Topology.DeclarePurchaseDeadQueueAsync(channel, stoppingToken);
             await Topology.DeclarePurchaseRetryAsync(channel, stoppingToken);
 
             await channel.BasicQosAsync(
