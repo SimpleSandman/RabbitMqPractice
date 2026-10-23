@@ -2,7 +2,7 @@
 
 A hands-on practice project for learning message-based systems with RabbitMQ and .NET 10. It is not production code, and it is not a claim of production message-bus experience. The goal was to understand the moving parts (acknowledgements, durability, retries, dead-lettering, routing) by building them and watching them fail.
 
-Everything runs locally: RabbitMQ in Docker Compose, plus a console Sender, an ASP.NET Core API, a Worker Service with two consumers, and a small shared library. They use the official `RabbitMQ.Client` library directly (no MassTransit or other framework), so the concepts stay visible.
+Everything runs locally: RabbitMQ in Docker Compose, plus a console Sender, an ASP.NET Core API, a Worker Service with three consumers, and a small shared library. They use the official `RabbitMQ.Client` library directly (no MassTransit or other framework), so the concepts stay visible.
 
 ## What it does
 
@@ -13,6 +13,8 @@ The project has two flows that share one broker.
 A failed message is not retried immediately. It goes to a wait queue, sits there for 5 seconds, and returns to the work queue. After 2 retries it is moved to a dead-letter queue so it can be inspected.
 
 **The store flow.** An **API** accepts a purchase (`POST /purchases` with a product name and a quantity), validates it, and publishes a `PurchaseCompleted` event to a topic exchange. The Worker's store service reads the events from its own queue. The API publishes to an exchange, not to a queue, so it does not know who consumes the events. The consumer does no real work: it reads the event, prints its ID, and acknowledges it. Processing is simulated, and a product name containing `poison` counts as a transient failure. As in the practice flow, a failed event goes to a wait queue, returns after 5 seconds, and is parked in its own dead-letter queue after 2 retries.
+
+A second consumer, the Worker's email service, reads the same events from its own queue. It is a stub: it prints the event ID and acknowledges it, and it never retries. Each consumer gets its own copy of every event.
 
 ## Architecture
 
@@ -34,7 +36,7 @@ flowchart LR
 | `practice-queue` | Queue, classic, durable | Dead-letters to `practice.retry` with key `wait` | Work queue |
 | `practice.retry` | Exchange, direct, durable | Binding `wait` to `practice-wait` | Receives rejected messages |
 | `practice-wait` | Queue, classic, durable | TTL 5000 ms, dead-letters to the default exchange with key `practice-queue` | Delay before a retry |
-| `practice.dlx` | Exchange, direct, durable | Binding `dead` to `practice-dead`, and binding `purchase.dead` to `purchase-dead` | Entry point to the parking lots of both flows |
+| `practice.dlx` | Exchange, direct, durable | Binding `dead` to `practice-dead`, binding `purchase.dead` to `purchase-dead`, and binding `purchase.email.dead` to `purchase-email-dead` | Entry point to the parking lots of all three consumers |
 | `practice-dead` | Queue, classic, durable | No dead-letter arguments | Holds messages that exhausted their retries |
 
 The Worker's practice service declares this whole topology on startup. The Sender declares only the work queue. Both call the same declaration code in the Messaging project, so the queue arguments are written once.
@@ -44,26 +46,32 @@ The Worker's practice service declares this whole topology on startup. The Sende
 ```mermaid
 flowchart LR
     A["API<br/>POST /purchases"] -->|"key: purchase.completed"| SE{{store.events}}
-    SE --> PP[purchase-processing]
+    SE -->|"binding: purchase.completed"| PP[purchase-processing]
+    SE -->|"binding: purchase.*"| PE[purchase-email]
     PP --> SW[Worker: store service]
+    PE --> EW[Worker: email service]
     PP -.->|"nack, requeue false<br/>dead-letter key: purchase.wait"| PR{{purchase.retry}}
     PR --> PW["purchase-wait<br/>TTL 5 s"]
     PW -.->|"TTL expires<br/>default exchange"| PP
     SW -->|"unreadable, or after 2 retries:<br/>publish key: purchase.dead, then ack"| DX{{practice.dlx}}
+    EW -->|"unreadable:<br/>publish key: purchase.email.dead, then ack"| DX
     DX --> PD[purchase-dead]
+    DX --> PED[purchase-email-dead]
 ```
 
 | Name | Kind | Settings | Role |
 |---|---|---|---|
-| `store.events` | Exchange, topic, durable | Declared by the API and by the consumer | Entry point for purchase events |
+| `store.events` | Exchange, topic, durable | Declared by the API and by each consumer | Entry point for purchase events |
 | `purchase-processing` | Queue, classic, durable | Bound to `store.events` with key `purchase.completed`. Dead-letters to `purchase.retry` with key `purchase.wait`. Declared by the consumer. | The consumer's queue, named for its job |
 | `purchase.retry` | Exchange, direct, durable | Binding `purchase.wait` to `purchase-wait` | Receives rejected purchase messages |
 | `purchase-wait` | Queue, classic, durable | TTL 5000 ms, dead-letters to the default exchange with key `purchase-processing` | Delay before a retry |
 | `purchase-dead` | Queue, classic, durable | Bound to `practice.dlx` with key `purchase.dead` | Holds purchase messages that could not be read, or that failed after 2 retries |
+| `purchase-email` | Queue, classic, durable | Bound to `store.events` with key `purchase.*`. Declared by the email service. | The email service's queue, named for its job |
+| `purchase-email-dead` | Queue, classic, durable | Bound to `practice.dlx` with key `purchase.email.dead` | Holds events the email service could not read |
 
-The two dead-letter queues share one exchange but use different routing keys (`dead` and `purchase.dead`), so each flow's parked messages land in their own queue.
+The three dead-letter queues share one exchange but use different routing keys (`dead`, `purchase.dead`, and `purchase.email.dead`), so each consumer's parked messages land in its own queue.
 
-The API declares only the exchange. The store service declares its own queue and binding. The result is that an event published before the queue has ever existed is dropped (see Known limitations).
+The API declares only the exchange. Each consumer declares its own queue and binding. The result is that an event published before a consumer's queue has ever existed is never delivered to that consumer (see Known limitations).
 
 ### Message flow: the practice flow
 
@@ -72,7 +80,7 @@ The API declares only the exchange. The store service declares its own queue and
 3. **Success:** acknowledge.
 4. **Failure with retries left:** reject without requeue. The work queue's dead-letter settings send the message to `practice.retry`, then to `practice-wait`. After 5 seconds it expires back into the work queue. Each trip adds an `x-death` entry whose `count` increases.
 5. **Failure with the retry limit reached:** the Worker publishes the message (with its original headers, marked persistent) to `practice.dlx` with key `dead`, then acknowledges the original.
-6. **Shutdown (Ctrl+C):** the Worker cancels its consumer so no new messages arrive, then waits up to 15 seconds for a message already in progress to finish and be acknowledged, then closes the channel and the connection. A message that reaches the handler after shutdown began is left unacknowledged, and the broker redelivers it once the channel closes. That last path was never triggered in testing (see Known limitations). Both Worker services use this sequence.
+6. **Shutdown (Ctrl+C):** the Worker cancels its consumer so no new messages arrive, then waits up to 15 seconds for a message already in progress to finish and be acknowledged, then closes the channel and the connection. A message that reaches the handler after shutdown began is left unacknowledged, and the broker redelivers it once the channel closes. That last path was never triggered in testing (see Known limitations). All three Worker services use this sequence.
 
 The retry limit is `maxRetries = 2`, and the message is parked when the death count reaches it. A permanently failing message is therefore delivered 3 times in total: the first attempt plus 2 retries. One cycle takes roughly 6 seconds (1 second of simulated work plus the 5 second TTL).
 
@@ -85,6 +93,8 @@ The retry limit is `maxRetries = 2`, and the message is parked when the death co
 5. **Failure with retries left:** reject without requeue. The queue's dead-letter settings send the event to `purchase.retry`, then to `purchase-wait`. After 5 seconds it expires back into `purchase-processing`.
 6. **Failure with the retry limit reached:** the service publishes the original body (with its headers, marked persistent) to `practice.dlx` with key `purchase.dead`, then acknowledges the original. That is 3 deliveries in total, as in the practice flow.
 7. **Unreadable message:** if reading the message throws (invalid JSON, a missing required field, or a malformed `x-death` header), it is parked the same way at once, with no retry, because retrying cannot fix it.
+8. **The email service** reads its own copy of the same event from `purchase-email`, prints the event ID, waits one second to simulate work, and acknowledges it. It never retries. If it cannot read the body, it publishes the original to `practice.dlx` with key `purchase.email.dead` and then acknowledges the original.
+9. **The two consumers are independent.** A product name containing `poison` is a failure for the store service and an ordinary success for the email service.
 
 ## Prerequisites
 
@@ -110,7 +120,7 @@ dotnet user-secrets set "RabbitMQ:Password" "password" --project src/RabbitMqPra
 
 The values must match `RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS` in `compose.yaml`. No `user-secrets init` is needed, because the secrets ID is already in the project files. If a value is missing, the connection code throws an `InvalidOperationException` such as `UserName is not configured`.
 
-In one terminal, start the Worker. Its two services declare the exchanges and queues of both flows:
+In one terminal, start the Worker. Its three services declare the exchanges and queues of both flows:
 
 ```bash
 dotnet run --project src/RabbitMqPractice.Worker
@@ -141,11 +151,13 @@ dotnet run --project src/RabbitMqPractice.Api
 
 This uses the `http` launch profile, so the API listens on http://localhost:5025. The Visual Studio debugger defaults to the `https` profile on port 7261. With the `http` profile, a warning that the HTTPS port could not be determined appeared in every run, and it was harmless.
 
-Send requests with the `.http` file in `src/RabbitMqPractice.Api`, which Visual Studio can run. It has a valid purchase and several invalid ones. A valid request returns 202 with the event, and the Worker prints `Received PurchaseCompleted message '<id>'` and `Processing of message '<id>' succeeded.`
+Send requests with the `.http` file in `src/RabbitMqPractice.Api`, which Visual Studio can run. It has a valid purchase and several invalid ones. A valid request returns 202 with the event, and the Worker prints `Received PurchaseCompleted message '<id>'` and `Processing of message '<id>' succeeded.` The email service prints the same ID, tagged `[email]`.
 
 To watch a retry, send a request whose product name contains `poison`, such as `poison widget`. The Worker receives the event three times, then parks it in `purchase-dead`, where the management UI shows its `x-death` header.
 
-To see an event without the consumer, create a queue in the management UI, bind it to `store.events` with the key `purchase.completed`, and use Get Messages on it.
+To see the wildcard, publish a valid `PurchaseCompleted` body from the management UI to `store.events` with the key `purchase.refunded`. Only the email service receives it.
+
+To see an event without the consumers, create a queue in the management UI, bind it to `store.events` with the key `purchase.completed`, and use Get Messages on it.
 
 ### Stopping and resetting
 
@@ -161,6 +173,7 @@ Plain `docker compose down` keeps the volume, so durable queues and persistent m
 
 - On one Windows machine, `docker compose up` failed with an error about `docker-credential-desktop` not being found. Running the same command from the Docker Desktop terminal worked. I did not diagnose the cause.
 - `UserName is not configured` (or the same message for another setting) means that setting was not found. The user secrets may not be set, or the app may not be running in the Development environment. For example, `dotnet run --no-launch-profile` skips the launch profile, so the secrets are not loaded.
+- A connection that just appeared shows 0 channels in the management UI. The statistics lag by a few seconds, and a refresh showed the channel (observed after starting the Worker).
 - The API returns 202 but the Worker never prints the event. The store service's queue probably did not exist yet when the event was published, so the broker dropped it. Start the Worker first.
 
 ## What is tested
@@ -217,10 +230,14 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 | A retry wait does not block the consumer | Sent a normal request right after the failing event's first rejection. The Worker processed it before the failing event's second delivery. This run used a 5 second simulated delay. |
 | An unreadable body skips the retry loop | Published `not json` from the management UI. It was logged and parked at once, with no retry lines, and the parked message had no `x-death` header. |
 | The `x-death` header on the purchase queue has the same shape as on the practice queue | Read in the management UI on the parked message: the wait queue's `expired` entry first, then the work queue's `rejected` entry, both with count 2. The `rejected` entry named `store.events` and the key `purchase.completed`. RabbitMQ also added `x-first-death-*` and `x-last-death-*` headers. The `time` values were five seconds apart, and by the console timing they were the first occurrence, not the latest. That last part is my reading of one run. |
-| The practice flow is unchanged by the store flow | After the store topology was added, and again after the purchase retry topology, the `rabbitmqctl list_queues name durable arguments messages` output for the three practice queues was identical to the saved baseline. |
+| One event reaches two consumers, each with its own copy | Sent one request with the Worker running: the store service and the email service printed the same message ID and both succeeded. With the Worker stopped, three requests left 3 messages in `purchase-processing` and 3 in `purchase-email`. Starting the Worker drained both, and each service processed the same three IDs in the same order. |
+| A wildcard binding routes in code | Published a valid event from the management UI to `store.events` with the key `purchase.refunded`. Only the email service received it, and `purchase-processing` stayed at 0. |
+| Each consumer parks unreadable messages in its own dead-letter queue | Published `not json` with the key `purchase.completed`. Each service logged the read failure and parked its copy: `purchase-dead` and `purchase-email-dead` each went up by 1, and `practice-dead` did not change. |
+| Consumers fail independently | Sent a request with the product name `poison widget`. The store service retried it twice and then parked it in `purchase-dead`. The email service, which has no failure rule, acknowledged it once, and `purchase-email-dead` did not change. |
+| The practice flow is unchanged by the store flow | After the store topology was added, again after the purchase retry topology, and again after the email queues, the `rabbitmqctl list_queues name durable arguments messages` output for the three practice queues was identical to the saved baseline. |
 | The API's connection is named and closes cleanly | The `ClientProvidedName` appeared in the broker log and the management UI. Every API shutdown logged a matching `closing AMQP connection` line at info level, with no warning. |
-| Each service has its own named connection | The management UI's Connections tab showed three connections named `practice`, `store`, and `api`, with one channel each. |
-| Topic exchange routing with wildcard bindings | **UI exercise only.** Built an exchange with three wildcard bindings in the management UI and published to it by hand. The code uses one exact key (`purchase.completed`) on a topic exchange. |
+| Each service has its own named connection | The management UI's Connections tab showed four connections named `practice`, `store`, `email`, and `api`, with one channel each. A look right after the Worker started showed 0 channels on the Worker connections, and a refresh a few seconds later showed 1 each, so the UI's statistics lag. |
+| Topic exchange routing with several wildcard bindings | **Partly a UI exercise.** Built an exchange with three wildcard bindings in the management UI and published to it by hand. The code binds one queue with an exact key (`purchase.completed`) and one with a wildcard (`purchase.*`), and the rows above check that routing. |
 
 ## Design decisions
 
@@ -238,12 +255,16 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - **The publisher is created at startup and registered as a singleton through a delegate.** If the broker is unreachable, the API fails to start instead of failing on the first request. Registering through a delegate, and not an instance, makes the container own the publisher, so it is disposed on shutdown. Microsoft's DI guidelines say the container does not dispose instances it did not create. Every shutdown showed a clean connection close in the broker log.
 - **The request type is separate from the event.** The client sends a product name and a quantity. The server sets the message ID and the timestamp, so a client cannot choose them. The event's members are `required`, so an event built without them does not compile, and the JSON deserializer rejects a message body that lacks them (checked in the tests).
 - **202 Accepted, with the event in the body.** There are no publisher confirms, so the API cannot say the broker has the message. It reports only that the request was accepted.
-- **The API declares only the exchange, and the consumer declares its own queue and binding.** The API does not know who consumes the events, which is the point of publishing to an exchange, and a second consumer would need no API change. The cost is the cold-start gap described below.
-- **Queues are named for the consumer's job.** `purchase-processing`, not a name based on the event, so a second consumer (an email service, for example) can get its own queue bound to the same exchange.
+- **The API declares only the exchange, and the consumer declares its own queue and binding.** The API does not know who consumes the events, which is the point of publishing to an exchange, and a second consumer would need no API change (the email service was added without touching the API). The cost is the cold-start gap described below.
+- **Queues are named for the consumer's job.** `purchase-processing` and `purchase-email`, not names based on the event, so each consumer has its own queue bound to the same exchange.
 - **Parked purchase messages use a separate routing key.** The store service publishes them to `practice.dlx` with key `purchase.dead` and acknowledges the original, the same pattern as the practice flow. A queue has a single dead-letter exchange setting, and on `purchase-processing` it points at the retry exchange, so parking is done by publishing from the consumer.
 - **The store queue has its own retry exchange and wait queue.** `purchase.retry` and `purchase-wait`, not the practice flow's, so the two flows stay independent. Sharing `practice.retry` with a different key would also have worked.
 - **One `RetryPolicy` serves both flows.** The decision (acknowledge, retry, or park) is the same pure function, fed a failure flag and the `x-death` count.
 - **Unreadable messages never enter the retry loop.** Retrying cannot fix a body that cannot be parsed, so the service parks it at once. Only failures that might clear up on their own are retried.
+- **Each consumer has its own queue, and so its own copy of every event.** A queue hands each message to one consumer, so two consumers on one queue would split the events (I saw that with two consumers on the practice queue). Two queues bound to one exchange give each consumer every event.
+- **The email service binds with a wildcard, and the store service with an exact key.** `purchase.*` lets the email service see any single-word purchase event, such as `purchase.refunded`, while processing sees only `purchase.completed`. The wildcard matches exactly one word after the dot (observed with `purchase.refunded`; a two-word key was not tried).
+- **The email service has its own dead-letter queue and no retry.** The stub cannot fail transiently, and an unreadable body cannot be fixed by retrying, so unreadable events are parked at once. Its queue has no dead-letter arguments, so the service never rejects a message: it acknowledges or parks, and its switch has no retry case, so an unexpected outcome throws.
+- **The three Worker services are copies, not a shared base class.** The shutdown sequence is repeated on purpose, so each service stays readable and was verified on its own. Extracting a base class is a possible later cleanup.
 - **One serializer for both sides.** `EventSerializer` in the Messaging project holds the JSON options (the web defaults: camelCase names, case-insensitive reading) and the content type, so the publisher and the consumer cannot disagree. A body of `null` is treated as an error like any other unreadable body.
 
 ## Known limitations
@@ -255,11 +276,11 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - **The image tag floats.** `rabbitmq:4-management` may resolve to a different version later. Pin an exact version for reproducible runs.
 - **Credentials.** The apps read them from user secrets, which is a development-only mechanism, and no other source was tested. The broker's throwaway credentials are still committed in `compose.yaml` and this README, which is acceptable only because the broker listens on localhost.
 - **Shutdown time follows the handler, not the time budgets.** In the one run with a 30 second handler, the connection close ran about 9 seconds against its 5 second budget, and the acknowledgement was lost. The message was redelivered. The host's own shutdown timeout was not tested.
-- **Two Worker services share one shutdown window.** Each service's cleanup can take up to about 28 seconds in a worst case, and the host's default shutdown timeout is 30 seconds. Whether the services stop one after the other or together was not checked.
+- **Three Worker services share one shutdown window.** Each service's cleanup can take up to about 28 seconds in a worst case, and the host's default shutdown timeout is 30 seconds. Whether the services stop one after the other or together was not checked.
 - **The late-message guard was never triggered.** After Ctrl+C the consumer is cancelled first, and in testing no message reached the handler afterward. The branch that leaves such a message unacknowledged is unexercised.
 - **Duplicate processing is possible.** A lost acknowledgement means a redelivery and a second run of the work; an early shutdown experiment processed the same message twice. There is no idempotent handler yet.
 - **Launch location.** The Worker found its `appsettings.json` under `dotnet run` and in the debugger, and the API found its under `dotnet run`. Launching the built executables directly from another folder was not tested.
-- **A cold-start gap.** An event published before the store service's queue has ever existed is dropped, with no error, and the API still returns 202. Once the queue exists, durability protects it.
+- **A cold-start gap.** An event published before a consumer's queue has ever existed is not delivered to that consumer, with no error, and the API still returns 202 (observed for the store queue). Once a queue exists, durability protects it.
 - **A 202 is not a delivery guarantee.** There are no publisher confirms, and `mandatory` is false, so an unroutable event is dropped silently (observed). The client guide says messages published while the connection is down can be lost.
 - **The publish takes no cancellation token.** My reasoning, which I did not test, is that a stalled broker would hold the semaphore while every other request waited behind it.
 - **A dead channel stays dead.** The client guide says channel-level exceptions close the channel and closed channels are not recovered. The publisher does not recreate its channel. Not tested.
@@ -270,7 +291,8 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - **Serializer edge cases are not covered.** Numbers sent as strings, duplicate property names, and a UTF-8 byte order mark.
 - **The purchase retry reuses the practice flow's fixed delay and cap.** 5 seconds and 2 retries, with no backoff. The failure rule is simulated: a product name containing `poison`.
 - **Parked messages lose their content type.** The park publish copies only the persistence flag and the headers, so the copy in the dead-letter queue has no content type (seen in the management UI). Cosmetic.
-- **Both Worker services log the same shutdown line,** so the two lines cannot be told apart.
+- **Two of the three Worker services log untagged lines,** so their shutdown messages cannot be told apart. The email service tags its lines with `[email]`.
+- **The email service is a stub.** It does no real work and has no retry.
 
 ## Gotchas I hit
 
@@ -284,10 +306,10 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 8. **Serializer tests that would pass for the wrong reason.** My first versions of the missing-property and malformed-JSON tests fed their JSON text through `Serialize`, which wraps a string in another layer of JSON. They would have thrown whatever the input was. It was caught in review, not by running the tests. Fix: raw bytes as the input, and valid bodies as controls.
 9. **A second dead-letter queue bound with the same routing key.** I first bound `purchase-dead` to `practice.dlx` with the key `dead`, the same key as `practice-dead`, so each parked message would have landed in both queues. A second slip left the park code publishing with the old key. Both were caught in review before running. Fix: a separate key, `purchase.dead`, in the binding and in the publish. Afterward, the two bad messages went only to `purchase-dead`.
 10. **A retry exchange that was never declared, and a queue declared twice with different arguments.** In my first draft of the purchase retry, the wait queue was bound to an exchange that nothing declared, and `purchase-processing` was declared once without dead-letter arguments and again with them. The first would have failed the bind, and the second is the `PRECONDITION_FAILED` of gotcha 1. Both were caught in review before running. Fix: declare the exchange in the retry method, and declare the queue once with its final arguments.
+11. **Copy-paste slips in the second consumer.** My first draft of the email service, copied from the store service, still consumed `purchase-processing`, so the two services would have competed for one queue while `purchase-email` filled up unread. It also bound its dead-letter queue under the wrong queue name, which would have left `purchase-email-dead` unbound and `purchase-dead` bound twice. And it kept the retry logic, which would have rejected `poison` events into a queue with no dead-letter arguments, so they would have been discarded silently. All three were caught in review before running. Fix: the right queue and binding names, and no retry outcome in the service.
 
 ## Not included
 
-- A second consumer on `store.events`
 - Publisher confirms
 - An idempotent handler or duplicate-message detection
 - Authentication on the API
@@ -296,7 +318,6 @@ Nothing automated talks to RabbitMQ. These behaviors were observed manually. Row
 - MassTransit or any other messaging framework
 - Integration tests against a real broker, including shutdown behavior, and API tests with a fake publisher
 - Quorum queues, clustering, or multi-node behavior
-- Wildcard topic routing in code (explored only by hand in the management UI)
 
 ## Repository layout
 
@@ -306,7 +327,7 @@ global.json                                Selects the Microsoft.Testing.Platfor
 src/RabbitMqPractice.Api/                  Minimal API: POST /purchases publishes PurchaseCompleted events to store.events
 src/RabbitMqPractice.Messaging/            Names, topology declarations, the PurchaseCompleted event and its serializer, connection settings from configuration
 src/RabbitMqPractice.Sender/               Publishes a practice message from the command line
-src/RabbitMqPractice.Worker/               Worker Service with two consumers (practice and store), shutdown handling, and RetryPolicy
+src/RabbitMqPractice.Worker/               Worker Service with three consumers (practice, store, and email), shutdown handling, and RetryPolicy
 tests/RabbitMqPractice.Messaging.Tests/    xUnit v3 tests for the event serializer
 tests/RabbitMqPractice.Worker.Tests/       xUnit v3 tests for RetryPolicy
 ```
