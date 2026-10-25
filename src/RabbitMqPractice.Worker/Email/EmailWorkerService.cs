@@ -3,6 +3,7 @@ using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Messaging.Topology;
 using RabbitMqPractice.Worker.Common;
 
 namespace RabbitMqPractice.Worker.Email
@@ -20,9 +21,8 @@ namespace RabbitMqPractice.Worker.Email
             await using IConnection connection = await factory.CreateConnectionAsync(cancellationToken: stoppingToken);
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
-            await Topology.DeclareStoreEventsAsync(channel, stoppingToken);
-            await Topology.DeclarePurchaseEmailQueueAsync(channel, stoppingToken);
-            await Topology.DeclarePurchaseEmailDeadQueueAsync(channel, stoppingToken);
+            EmailTopology et = new();
+            await et.DeclareAsync(channel, stoppingToken);
 
             await channel.BasicQosAsync(
                 prefetchSize: 0,

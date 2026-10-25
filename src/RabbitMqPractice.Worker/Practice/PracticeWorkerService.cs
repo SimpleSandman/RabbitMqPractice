@@ -2,6 +2,7 @@
 using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Messaging.Topology;
 using RabbitMqPractice.Worker.Common;
 using System.Text;
 
@@ -19,18 +20,14 @@ namespace RabbitMqPractice.Worker.Practice
             await using IConnection connection = await factory.CreateConnectionAsync(cancellationToken: stoppingToken);
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
-            #region Exchange and Queue Setup
-
-            await Topology.DeclareRetryDeadLetterAsync(channel, stoppingToken);
-            await Topology.DeclareWorkQueueAsync(channel, stoppingToken);
+            PracticeTopology pt = new();
+            await pt.DeclareAsync(channel, stoppingToken);
 
             await channel.BasicQosAsync(
                 prefetchSize: 0,
                 prefetchCount: 1,
                 global: false,
                 cancellationToken: stoppingToken);
-
-            #endregion
 
             const long maxRetries = 2L;
 

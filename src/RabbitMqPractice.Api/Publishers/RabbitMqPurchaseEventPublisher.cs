@@ -1,8 +1,8 @@
 ﻿using RabbitMQ.Client;
 using RabbitMqPractice.Api.Publishers.Interfaces;
-using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Messaging.Topology;
 
 namespace RabbitMqPractice.Api.Publishers
 {
@@ -26,7 +26,8 @@ namespace RabbitMqPractice.Api.Publishers
             {
                 IChannel channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
 
-                await Topology.DeclareStoreEventsAsync(channel, cancellationToken);
+                await StoreTopology.DeclareExchangeAsync(channel, cancellationToken);
+
                 return new RabbitMqPurchaseEventPublisher(connection, channel);
             }
             catch

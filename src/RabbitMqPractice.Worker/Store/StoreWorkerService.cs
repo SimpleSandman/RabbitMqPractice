@@ -3,6 +3,7 @@ using RabbitMQ.Client.Events;
 using RabbitMqPractice.Messaging;
 using RabbitMqPractice.Messaging.Events;
 using RabbitMqPractice.Messaging.Names;
+using RabbitMqPractice.Messaging.Topology;
 using RabbitMqPractice.Worker.Common;
 
 namespace RabbitMqPractice.Worker.Store
@@ -19,9 +20,8 @@ namespace RabbitMqPractice.Worker.Store
             await using IConnection connection = await factory.CreateConnectionAsync(cancellationToken: stoppingToken);
             await using IChannel channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
-            await Topology.DeclareStoreQueueAsync(channel, stoppingToken);
-            await Topology.DeclarePurchaseDeadQueueAsync(channel, stoppingToken);
-            await Topology.DeclarePurchaseRetryAsync(channel, stoppingToken);
+            StoreTopology st = new();
+            await st.DeclareAsync(channel, stoppingToken);
 
             await channel.BasicQosAsync(
                 prefetchSize: 0,
