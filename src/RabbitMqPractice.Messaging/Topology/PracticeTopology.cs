@@ -3,7 +3,7 @@ using RabbitMqPractice.Messaging.Names;
 
 namespace RabbitMqPractice.Messaging.Topology
 {
-    public class PracticeTopology : TopologyBase
+    public sealed class PracticeTopology : TopologyBase
     {
         public static async Task DeclareWorkQueueAsync(IChannel channel, CancellationToken cancellationToken = default)
         {

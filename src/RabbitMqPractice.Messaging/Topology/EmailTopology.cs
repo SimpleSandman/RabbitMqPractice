@@ -3,7 +3,7 @@ using RabbitMqPractice.Messaging.Names;
 
 namespace RabbitMqPractice.Messaging.Topology
 {
-    public class EmailTopology : TopologyBase
+    public sealed class EmailTopology : TopologyBase
     {
         public override async Task DeclareAsync(IChannel channel, CancellationToken cancellationToken = default)
         {
