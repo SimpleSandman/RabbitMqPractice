@@ -12,5 +12,8 @@ builder.Services.AddHostedService<StoreWorkerService>();
 
 builder.Services.AddSingleton<ConfigureConnectionFactory>();
 
+// Each service owns its own connection and channel, so nothing is shared, and a slow drain should not delay the others.
+builder.Services.Configure<HostOptions>(options => options.ServicesStopConcurrently = true);
+
 IHost app = builder.Build();
 app.Run();
