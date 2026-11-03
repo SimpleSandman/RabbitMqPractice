@@ -1,0 +1,31 @@
+# Known limitations
+
+[README](../README.md) | [Architecture](architecture.md) | [How to run](running.md) | [Testing](testing.md) | [Design decisions](design-decisions.md) | [Known limitations](known-limitations.md) | [Gotchas](gotchas.md)
+
+- **The `x-death` ordering is assumed.** The code reads the first entry. On RabbitMQ 4.3.6, a retried message carries two entries: the wait queue's `expired` entry first, then the work queue's `rejected` entry, each with the same count. This was confirmed by decoding the header in the debugger on the practice queue, and by reading it in the management UI on the purchase queue. The code would need revisiting if the topology changed.
+- **Publish-then-acknowledge is not atomic.** If a Worker service crashes between publishing to the dead-letter exchange and acknowledging, the message is redelivered and parked twice. Publisher confirms would narrow the gap and were not used.
+- **Exception behavior is only partly tested.** Observed: an acknowledgement on an already-closed channel throws `AlreadyClosedException`, which the handler logs and rethrows. Not tested: what the client does with the message and the channel when a handler throws on an open channel.
+- **The retry-limit boundary was a deliberate choice.** A limit of 2 with `>=` means 2 retries. Using `>` would allow 3. The limit is a literal `2L` in two hooks.
+- **The image tag floats.** `rabbitmq:4-management` may resolve to a different version later. Pin an exact version for reproducible runs.
+- **Credentials.** The apps read them from user secrets, which is a development-only mechanism, and no other source was tested. The broker's throwaway credentials are still committed in `compose.yaml` and the documentation, which is acceptable only because the broker listens on localhost.
+- **Shutdown time follows the handler, not the time budgets.** In the one run with a 30 second handler, the connection close ran about 9 seconds against its 5 second budget, and the acknowledgement was lost. The message was redelivered. The host's own shutdown timeout was not tested.
+- **The shutdown margin is thin.** Each service's cleanup can take up to about 28 seconds in the worst case (3 to cancel, 15 to wait for a handler, and 5 each to close the channel and the connection), and the host's default shutdown timeout is 30 seconds. The services now stop concurrently, so each has the whole timeout, but a handler stuck for the full wait leaves about 2 seconds of slack. The timeout boundary was not tested.
+- **The late-message guard was never triggered.** After Ctrl+C the consumer is cancelled first, and in testing no message reached the handler afterward. The branch that leaves such a message unacknowledged is unexercised.
+- **Duplicate processing is possible.** A lost acknowledgement means a redelivery and a second run of the work; an early shutdown experiment processed the same message twice. There is no idempotent handler yet.
+- **Launch location.** The Worker found its `appsettings.json` under `dotnet run` and in the debugger, and the API found its under `dotnet run`. Launching the built executables directly from another folder was not tested.
+- **A cold-start gap.** An event published before a consumer's queue has ever existed is not delivered to that consumer, with no error, and the API still returns 202 (observed for the store queue). Once a queue exists, durability protects it.
+- **A 202 is not a delivery guarantee.** There are no publisher confirms, and `mandatory` is false, so an unroutable event is dropped silently (observed). The client guide says messages published while the connection is down can be lost.
+- **The publish takes no cancellation token.** My reasoning, which I did not test, is that a stalled broker would hold the semaphore while every other request waited behind it.
+- **A dead channel stays dead.** The client guide says channel-level exceptions close the channel and closed channels are not recovered. The publisher does not recreate its channel. Not tested.
+- **Broker failures while the API runs were not tested.** There is no handling for them, so a publish that fails would fail the request.
+- **A narrow race on a Worker channel at shutdown.** The shutdown path cancels the consumer on the same channel that a handler may be using to publish to the dead-letter exchange. The client guide says publishers must not share a channel across threads. The window is small, and I did not observe a problem.
+- **The API creates its publisher before the host is built.** My reasoning, which I did not try, is that tests which start the host would need a live broker even with a fake publisher registered, until this is restructured.
+- **The two validation failure shapes differ.** A validation failure returns a JSON body. A body missing a required field fails during binding and returned a plain-text exception message in Development. Production behavior was not checked.
+- **Serializer edge cases are not covered.** Numbers sent as strings, duplicate property names, and a UTF-8 byte order mark.
+- **The purchase retry reuses the practice flow's fixed delay and cap.** 5 seconds and 2 retries, with no backoff. The failure rule is simulated: a product name containing `poison`.
+- **Parked messages lose their content type.** The park publish copies only the persistence flag and the headers, so the copy in the dead-letter queue has no content type (seen in the management UI). Cosmetic.
+- **Logging is `Console.WriteLine`, with the service name and level written into each line.** There is no level filtering or structured logging, and the `ILogger` TODOs in the publisher are still open.
+- **The email service is a stub.** It does no real work and has no retry.
+- **The delay setting has no default in code.** A missing `Simulation:ProcessingDelayMilliseconds` reads as 0, so the simulated work silently disappears.
+- **An unhandled exception in one service stops the whole host.** The documented default for `BackgroundServiceExceptionBehavior` is `StopHost`. It was not observed here, so a missing setting at startup would, by the documentation, stop all three services.
+- **The topology objects are created with `new` inside each service.** They are not injected, so a test cannot replace them.
