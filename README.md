@@ -4,6 +4,13 @@ A hands-on practice project for learning message-based systems with RabbitMQ and
 
 Everything runs locally: RabbitMQ in Docker Compose, plus a console Sender, an ASP.NET Core API, a Worker Service with three consumers, and a small shared library. They use the official `RabbitMQ.Client` library directly (no MassTransit or other framework), so the concepts stay visible.
 
+## At a glance
+
+- Two flows on one broker: a practice flow (Sender to Worker) and a store flow (API to a topic exchange to two independent consumers).
+- Manual acknowledgements, delayed retries through a TTL wait queue, dead-letter queues, and a shutdown that finishes the message in progress (within a 15 second budget).
+- 35 automated xUnit test cases on the retry logic and the event serializer, plus broker behaviors verified by hand (see [Testing](docs/testing.md)).
+- What is missing is listed in [Known limitations](docs/known-limitations.md) and under "Not included" below.
+
 ## What it does
 
 The project has two flows that share one broker.
